@@ -45,6 +45,50 @@ public:
         return true;
     }
 
+    bool VisitFunctionDecl(FunctionDecl *FD) {
+        if (FD->hasBody()) {
+            Stmt *Body = FD->getBody();
+            if (!isa<CompoundStmt>(Body)) {
+                TraverseStmt(Body); // Explicitly visit the single statement body
+            }
+        }
+        return true;
+    }
+
+    bool VisitCXXMethodDecl(CXXMethodDecl *MD) {
+        if (MD->hasBody()) {
+            Stmt *Body = MD->getBody();
+            if (!isa<CompoundStmt>(Body)) {
+                TraverseStmt(Body); // Explicitly visit the single statement body
+            }
+        }
+        return true;
+    }
+
+    bool VisitForStmt(ForStmt *FS) {
+        Stmt *Body = FS->getBody();
+        if (Body && !isa<CompoundStmt>(Body)) {
+            TraverseStmt(Body); // Explicitly visit the single statement body
+        }
+        return true;
+    }
+
+    bool VisitWhileStmt(WhileStmt *WS) {
+        Stmt *Body = WS->getBody();
+        if (Body && !isa<CompoundStmt>(Body)) {
+            TraverseStmt(Body); // Explicitly visit the single statement body
+        }
+        return true;
+    }
+
+    bool VisitDoStmt(DoStmt *DS) {
+        Stmt *Body = DS->getBody();
+        if (Body && !isa<CompoundStmt>(Body)) {
+            TraverseStmt(Body); // Explicitly visit the single statement body
+        }
+        return true;
+    }
+
 private:
     Rewriter &TheRewriter;
     std::unordered_set<unsigned> LinesProcessed;
