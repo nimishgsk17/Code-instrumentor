@@ -1,138 +1,110 @@
-#include "clang/AST/RecursiveASTVisitor.h"
-#include "clang/Frontend/CompilerInstance.h"
+#include "clang/AST/AST.h"
+#include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/CommandLine.h"
-#include <unordered_set>
+#include "clang/Frontend/CompilerInstance.h"
+
+#include <iostream>
 
 using namespace clang;
 using namespace clang::tooling;
-using namespace llvm;
+using namespace clang::ast_matchers;
 
-namespace {
-
-class FunctionPrinterVisitor : public RecursiveASTVisitor<FunctionPrinterVisitor> {
+class BlockVisitor : public MatchFinder::MatchCallback {
 public:
-    explicit FunctionPrinterVisitor(Rewriter &R) : TheRewriter(R) {}
+  BlockVisitor(Rewriter &R) : Rewrite(R) {}
 
-    bool VisitStmt(Stmt *S) {
-        if (isa<CompoundStmt>(S)) {
-            return true; // Handled in VisitCompoundStmt
-        }
+  virtual void run(const MatchFinder::MatchResult &Result) {
+    SourceManager &SM = *Result.SourceManager;
 
-        if (!TheRewriter.getSourceMgr().isInSystemHeader(S->getBeginLoc())) {
-            SourceLocation SL = S->getBeginLoc();
-            if (SL.isValid() && !SL.isMacroID()) {
-                unsigned Line = TheRewriter.getSourceMgr().getSpellingLineNumber(SL);
-                if (LinesProcessed.insert(Line).second) {
-                    std::string printStmt = "std::cout << \"Line " + std::to_string(Line) + " executed.\" << std::endl;";
-                    TheRewriter.InsertTextBefore(SL, printStmt);
-                }
-            }
-        }
-        return true;
+    if (const CompoundStmt *CS = Result.Nodes.getNodeAs<CompoundStmt>("block")) {
+      unsigned int lineNo = SM.getSpellingLineNumber(CS->getBeginLoc());
+      std::string coutStmt = "std::cout << \"Visiting block at line: " + std::to_string(lineNo) + "\" << std::endl; ";
+      SourceLocation loc = CS->getBeginLoc().getLocWithOffset(1);
+      Rewrite.InsertText(loc, coutStmt, true, true);
+    } else if (const IfStmt *If = Result.Nodes.getNodeAs<IfStmt>("ifStmt")) {
+      unsigned int lineNo = SM.getSpellingLineNumber(If->getBeginLoc());
+      std::string coutStmt = "std::cout << \"Visiting if statement at line: " + std::to_string(lineNo) + "\" << std::endl; ";
+      SourceLocation loc = If->getBeginLoc();
+      Rewrite.InsertText(loc, coutStmt, true, true);
+    } else if (const ForStmt *For = Result.Nodes.getNodeAs<ForStmt>("forStmt")) {
+      unsigned int lineNo = SM.getSpellingLineNumber(For->getBeginLoc());
+      std::string coutStmt = "std::cout << \"Visiting for loop at line: " + std::to_string(lineNo) + "\" << std::endl; ";
+      SourceLocation loc = For->getBeginLoc();
+      Rewrite.InsertText(loc, coutStmt, true, true);
+    } else if (const WhileStmt *While = Result.Nodes.getNodeAs<WhileStmt>("whileStmt")) {
+      unsigned int lineNo = SM.getSpellingLineNumber(While->getBeginLoc());
+      std::string coutStmt = "std::cout << \"Visiting while loop at line: " + std::to_string(lineNo) + "\" << std::endl; ";
+      SourceLocation loc = While->getBeginLoc();
+      Rewrite.InsertText(loc, coutStmt, true, true);
+    } else if (const DoStmt *Do = Result.Nodes.getNodeAs<DoStmt>("doStmt")) {
+      unsigned int lineNo = SM.getSpellingLineNumber(Do->getBeginLoc());
+      std::string coutStmt = "std::cout << \"Visiting do-while loop at line: " + std::to_string(lineNo) + "\" << std::endl; ";
+      SourceLocation loc = Do->getBeginLoc();
+      Rewrite.InsertText(loc, coutStmt, true, true);
+    } else if (const FunctionDecl *Func = Result.Nodes.getNodeAs<FunctionDecl>("function")) {
+      if (Func->hasBody()) {
+        unsigned int lineNo = SM.getSpellingLineNumber(Func->getBody()->getBeginLoc());
+        std::string coutStmt = "std::cout << \"Visiting function '" + Func->getNameInfo().getName().getAsString() + "' at line: " + std::to_string(lineNo) + "\" << std::endl; ";
+        SourceLocation loc = Func->getBody()->getBeginLoc().getLocWithOffset(1);
+        Rewrite.InsertText(loc, coutStmt, true, true);
+      }
+    } else if (const CXXConstructorDecl *Ctor = Result.Nodes.getNodeAs<CXXConstructorDecl>("constructor")) {
+      if (Ctor->hasBody()) {
+        unsigned int lineNo = SM.getSpellingLineNumber(Ctor->getBody()->getBeginLoc());
+        std::string coutStmt = "std::cout << \"Visiting constructor '" + Ctor->getNameAsString() + "' at line: " + std::to_string(lineNo) + "\" << std::endl; ";
+        SourceLocation loc = Ctor->getBody()->getBeginLoc().getLocWithOffset(1);
+        Rewrite.InsertText(loc, coutStmt, true, true);
+      }
     }
-
-    bool VisitCompoundStmt(CompoundStmt *S) {
-        if (!TheRewriter.getSourceMgr().isInSystemHeader(S->getBeginLoc())) {
-            for (auto it = S->body_begin(); it != S->body_end(); ++it) {
-                Stmt *stmt = *it;
-                TraverseStmt(stmt); // Ensure all statements are visited
-            }
-        }
-        return true;
-    }
-
-    bool VisitFunctionDecl(FunctionDecl *FD) {
-        if (FD->hasBody()) {
-            Stmt *Body = FD->getBody();
-            if (!isa<CompoundStmt>(Body)) {
-                TraverseStmt(Body); // Explicitly visit the single statement body
-            }
-        }
-        return true;
-    }
-
-    bool VisitCXXMethodDecl(CXXMethodDecl *MD) {
-        if (MD->hasBody()) {
-            Stmt *Body = MD->getBody();
-            if (!isa<CompoundStmt>(Body)) {
-                TraverseStmt(Body); // Explicitly visit the single statement body
-            }
-        }
-        return true;
-    }
-
-    bool VisitForStmt(ForStmt *FS) {
-        Stmt *Body = FS->getBody();
-        if (Body && !isa<CompoundStmt>(Body)) {
-            TraverseStmt(Body); // Explicitly visit the single statement body
-        }
-        return true;
-    }
-
-    bool VisitWhileStmt(WhileStmt *WS) {
-        Stmt *Body = WS->getBody();
-        if (Body && !isa<CompoundStmt>(Body)) {
-            TraverseStmt(Body); // Explicitly visit the single statement body
-        }
-        return true;
-    }
-
-    bool VisitDoStmt(DoStmt *DS) {
-        Stmt *Body = DS->getBody();
-        if (Body && !isa<CompoundStmt>(Body)) {
-            TraverseStmt(Body); // Explicitly visit the single statement body
-        }
-        return true;
-    }
+  }
 
 private:
-    Rewriter &TheRewriter;
-    std::unordered_set<unsigned> LinesProcessed;
+  Rewriter &Rewrite;
 };
 
-class FunctionPrinterASTConsumer : public ASTConsumer {
+class BlockVisitorAction : public ASTFrontendAction {
 public:
-    explicit FunctionPrinterASTConsumer(Rewriter &R) : Visitor(R) {}
+  virtual std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef file) {
+    RewriterForFile.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
+    MatchFinder *Finder = new MatchFinder();
+    BlockVisitor *Visitor = new BlockVisitor(RewriterForFile);
 
-    void HandleTranslationUnit(ASTContext &Context) override {
-        Visitor.TraverseDecl(Context.getTranslationUnitDecl());
-    }
+    Finder->addMatcher(compoundStmt().bind("block"), Visitor);
+    Finder->addMatcher(ifStmt().bind("ifStmt"), Visitor);
+    Finder->addMatcher(forStmt().bind("forStmt"), Visitor);
+    Finder->addMatcher(whileStmt().bind("whileStmt"), Visitor);
+    Finder->addMatcher(doStmt().bind("doStmt"), Visitor);
+    Finder->addMatcher(functionDecl(isDefinition()).bind("function"), Visitor);
+    Finder->addMatcher(cxxConstructorDecl(isDefinition()).bind("constructor"), Visitor);
+
+    return Finder->newASTConsumer();
+  }
+
+  void EndSourceFileAction() override {
+    SourceManager &SM = RewriterForFile.getSourceMgr();
+    llvm::errs() << "** EndSourceFileAction for: "
+                 << SM.getFileEntryForID(SM.getMainFileID())->tryGetRealPathName() << "\n";
+    RewriterForFile.getEditBuffer(SM.getMainFileID()).write(llvm::outs());
+  }
 
 private:
-    FunctionPrinterVisitor Visitor;
+  Rewriter RewriterForFile;
 };
 
-class FunctionPrinterFrontendAction : public ASTFrontendAction {
-public:
-    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef file) override {
-        TheRewriter.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-        return std::make_unique<FunctionPrinterASTConsumer>(TheRewriter);
-    }
-
-    void EndSourceFileAction() override {
-        TheRewriter.getEditBuffer(TheRewriter.getSourceMgr().getMainFileID()).write(llvm::outs());
-    }
-
-private:
-    Rewriter TheRewriter;
-};
-
-} // namespace
-
-static llvm::cl::OptionCategory MyToolCategory("function-printer options");
+static llvm::cl::OptionCategory MyToolCategory("block-visitor options");
 
 int main(int argc, const char **argv) {
-    auto ExpectedParser = CommonOptionsParser::create(argc, argv, MyToolCategory);
-    if (!ExpectedParser) {
-        llvm::errs() << ExpectedParser.takeError();
-        return 1;
-    }
-    CommonOptionsParser &OptionsParser = ExpectedParser.get();
-    ClangTool Tool(OptionsParser.getCompilations(), OptionsParser.getSourcePathList());
+  auto OptionsParser = CommonOptionsParser::create(argc, argv, MyToolCategory);
+  if (!OptionsParser) {
+    llvm::errs() << OptionsParser.takeError();
+    return 1;
+  }
 
-    return Tool.run(newFrontendActionFactory<FunctionPrinterFrontendAction>().get());
+  ClangTool Tool(OptionsParser->getCompilations(), OptionsParser->getSourcePathList());
+
+  return Tool.run(newFrontendActionFactory<BlockVisitorAction>().get());
 }
